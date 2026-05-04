@@ -1,0 +1,98 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: OPA-Notes-main/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+        working-directory: OPA-Notes-main
+
+      - name: Run Lint
+        run: npm run lint
+        working-directory: OPA-Notes-main
+
+      - name: Run Audit
+        run: npm audit --audit-level=high
+        working-directory: OPA-Notes-main
+
+  opa-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OPA
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      - name: OPA Check
+        run: |
+          opa check policy/
+        working-directory: OPA-Notes-main
+
+      - name: OPA Test
+        run: |
+          opa test policy/ -v
+        working-directory: OPA-Notes-main
+
+  node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: OPA-Notes-main/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+        working-directory: OPA-Notes-main
+
+      - name: Run Tests
+        run: npm test
+        working-directory: OPA-Notes-main
+
+  policy-compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Conftest
+        run: |
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/open-policy-agent/conftest/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/v//')
+          wget "https://github.com/open-policy-agent/conftest/releases/download/v${LATEST_VERSION}/conftest_${LATEST_VERSION}_Linux_x86_64.tar.gz"
+          tar xzf conftest_${LATEST_VERSION}_Linux_x86_64.tar.gz
+          sudo mv conftest /usr/local/bin
+
+      - name: Run Conftest
+        run: conftest test config.json --policy policy/
+        working-directory: OPA-Notes-main
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [lint-and-audit, opa-checks, node-tests, policy-compliance]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: docker build -t opa-notes-app .
+        working-directory: OPA-Notes-main
